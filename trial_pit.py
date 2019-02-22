@@ -1,7 +1,7 @@
 import os 
 curr_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(curr_path)
-from models import DeepDoubleSarsa, Double_Sarsa, Expected_Double_Sarsa
+from models import DeepDoubleSarsa, Double_Sarsa, Expected_Double_Sarsa, ReplayBuffer
 import numpy as np 
 import matplotlib.pyplot as plt
 import random
@@ -76,35 +76,35 @@ def deep_grid_world():
     ddsarsaB = DeepDoubleSarsa(64, 4)
     
 
+    batch_size = 35
     episodes = 50000
     rewards, lossa, lossb = [], [], []
+    replay_buffer = ReplayBuffer(1000)
+    train = 1
     for e in range(episodes):
         total_reward = 0
         agent_pose = [0,1]
         phia = np.zeros(16)
         phia[1] = 1
-        input = np.concatenate([phia, phip, phiw, phig], axis=0)
-        # print(input.shape)
-        # input = torch.from_numpy(input)
-        input = Variable(torch.from_numpy(input))
+        input1 = np.concatenate([phia, phip, phiw, phig], axis=0)
+
+        input = Variable(torch.from_numpy(input1))
         input = input.view(-1, 64)
         input = input.float()
-        # print(input)
-        # exit()
         q1 = ddsarsaA(input)
         q2 = ddsarsaB(input)
         a = act(q1, q2, epsilon)
         done = False
         timesteps = 0
         while not done:
-            r, sn, done = step(agent_pose, actions[a], step_reward=None)
+            r, sn, done = step(agent_pose, actions[a], step_reward='d')
             agent_pose = sn
             spose = env[sn[0], sn[1]]
             phia = np.zeros(16)
             phia[spose-1] = 1
 
-            n_input = np.concatenate([phia, phip, phiw, phig], axis=0)
-            n_input = torch.from_numpy(n_input)
+            n_input1 = np.concatenate([phia, phip, phiw, phig], axis=0)
+            n_input = torch.from_numpy(n_input1)
             n_input = Variable(n_input.view(-1, 64))
             n_input = n_input.float()
 
@@ -112,18 +112,21 @@ def deep_grid_world():
             q2n = ddsarsaB(n_input)
 
             an = act(q1n, q2n, epsilon)
-            sarsa = [input, a, r, n_input, an]
-            loss = 0
-            if np.random.rand(1)[0] > 0.5:
-                loss = ddsarsaA.update(sarsa, q2n, gamma)
-                lossa.append(loss.data[0])
-            else:
-                loss = ddsarsaB.update(sarsa, q1n, gamma)
-                lossb.append(loss.data[0])
+            # sarsa = [input, a, r, n_input, an]
+            replay_buffer.push(input1, a, r, n_input1, done, q1n, q2n)
+            if len(replay_buffer)>batch_size:
+                loss = 0
+                s, a, r, sp, ap, d, q1n, q2n = replay_buffer.sample(batch_size)
+                if np.random.rand(1)[0] > 0.5:
+                    loss = ddsarsaA.update([s, a, r, sp, ap, d], q2n, gamma)
+                    lossa.append(loss.data[0])
+                else:
+                    loss = ddsarsaB.update([s, a, r, sp, ap, d], q1n, gamma)
+                    lossb.append(loss.data[0])
+                print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss.data[0]))
             a = an
             input = n_input
             total_reward +=r
-            print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss.data[0]))
         rewards.append(total_reward)
            
     # print(total_reward)
@@ -143,12 +146,12 @@ def deep_grid_world():
 
 
 def gym_cartpole():
-    env = gym.make('CartPole-v1')
+    env = gym.make('MountainCar-v0')
 
     obs_len = env.observation_space.shape[0]
     
-    ddsarsa1 = DeepDoubleSarsa(obs_len, 2)
-    ddsarsa2 = DeepDoubleSarsa(obs_len, 2)
+    ddsarsa1 = DeepDoubleSarsa(obs_len, 3)
+    ddsarsa2 = DeepDoubleSarsa(obs_len, 3)
 
 
     alpha, gamma, epsilon = 0.1, 0.99, 0.1
@@ -253,8 +256,8 @@ def step(state, action, step_reward=None):
 
 
 if __name__ == '__main__':
-    # grid_world()
-    gym_cartpole()
+    deep_grid_world()
+    # gym_cartpole()
     
     pass
 

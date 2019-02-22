@@ -10,6 +10,28 @@ import torch
 from torch.autograd import Variable
 
 
+
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+    
+    def push(self, state, action, reward, next_state, done, q1n, q2n):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = (state, action, reward, next_state, done, q1n, q2n)
+        self.position = (self.position + 1) % self.capacity
+    
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state, done, q1n, q2n = map(np.stack, zip(*batch))
+        return state, action, reward, next_state, done, q1n, q2n
+    
+    def __len__(self):
+        return len(self.buffer)
+
 class Double_Sarsa:
 
     def __init__(self, state_space, action_space, alpha=0.5, gamma=0.9, epsilon=0.1):
@@ -109,14 +131,77 @@ class DeepDoubleSarsa(torch.nn.Module):
 
         return q
 
-    def update(self, sarsa, q2, gamma):
-        s, a, r, sn, an = sarsa
+    def update(self, sarsa, q2, gamma):   
+        s, a, r, sn, an, d = sarsa
+        s = torch.FloatTensor(s)
+        sn = torch.FloatTensor(sn)
+        a = torch.FloatTensor(a)
+        an = torch.FloatTensor(an)
+        r = torch.FloatTensor(r)
+        d = torch.FloatTensor(d)
+
+
+
         q = self(s)
         self.optimizer.zero_grad()
-        loss = torch.mean(torch.pow(r + gamma*q2[:,an] - q[:,a],2)/2.0)
+        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*q2[:,an] - q[:,a],2)/2.0)
         loss.backward()
         self.optimizer.step()
         return loss
+
+class cnnDeepDoubleSarsa(torch.nn.Module):
+
+    def __init__(self, initus, exitus, bias=False):
+        super(DeepDoubleSarsa, self).__init__()
+
+        # dobbiamo usare convolutional?????
+        self.cn1 = torch.nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=1)
+        self.cn2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1)
+        self.cn3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        
+        self.fc1 = torch.nn.Linear(5760, 512, bias=bias)
+        self.fc2 = torch.nn.Linear(512, exitus, bias=bias)
+
+        ''' torch.optim is a package implementing various optimization algorithms '''
+        # Adam optimizer is one of the most popular gradient descent optimizer in deep learning
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
+
+    def forward(self, input):
+        q = torch.nn.functional.relu(self.cn1(input))
+        q = torch.nn.functional.relu(self.cn2(q))
+        q = torch.nn.functional.relu(self.cn3(q))
+        q = q.view(-1, self.num_flat_features(q))
+   
+        ''' Activation function (to get the output of node) : ReLU function returns a 0 for input values less than 0,
+         while input values above 0, the function returns a value between 0 and 1 '''
+        
+        q = torch.nn.functional.relu(self.fc1(q))
+        q = self.fc2(q)
+
+        return q
+
+    def update(self, sarsa, q2, gamma):
+        s, a, r, sn, an = sarsa
+        q = self(s)
+        '''In PyTorch we need to set the gradients to zero before starting to do backpropagation because PyTorch accumulates 
+        the gradients on subsequent backward passes'''
+        self.optimizer.zero_grad()
+        '''Update rule for DDS'''
+        loss = torch.mean(torch.pow(r + gamma*q2[:,an] - q[:,a],2)/2.0)
+        ''' Backpropagation: loss.backward() computes dloss/dx for every parameter x which has requires_grad=True. 
+        These are accumulated into x.grad for every parameter x '''
+        loss.backward()
+        ''' with update the weights '''
+        self.optimizer.step()
+        return loss
+      
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
+
 
 
 def softmax(x):
