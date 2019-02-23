@@ -18,16 +18,32 @@ class ReplayBuffer:
         self.buffer = []
         self.position = 0
     
-    def push(self, state, action, reward, next_state, done, q1n, q2n):
+    def push(self, state, action, reward, next_state, next_action, done, q1n, q2n):
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, done, q1n, q2n)
+        self.buffer[self.position] = (state, action, reward, next_state, next_action, done, q1n, q2n)
         self.position = (self.position + 1) % self.capacity
     
     def sample(self, batch_size):
+
+        # np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
         batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state, done, q1n, q2n = map(np.stack, zip(*batch))
-        return state, action, reward, next_state, done, q1n, q2n
+        # state, action, reward, next_state, next_action, done, q1n, q2n = batch[0]
+        # state, action, reward, next_state, next_action, done, q1n, q2n = [state], [action], [reward], [next_state], [next_action], [done], [q1n], [q2n]
+
+        # for b in batch[1:]:
+        #     s, a, r, sn, an, d, q1, q2 = b
+        #     state = np.concatenate([state, [s]])
+        #     action = np.concatenate([action, [a]])
+        #     reward = np.concatenate([reward, [r]])
+        #     next_state = np.concatenate([next_state, [sn]])
+        #     next_action = np.concatenate([next_action, [an]])
+        #     done = np.concatenate([done, [d]])
+        #     q1n = np.concatenate([q1n, [q1]])
+        #     q2n = np.concatenate([q2n, [q2]])
+
+        state, action, reward, next_state, next_action, done, q1n, q2n = map(np.stack, zip(*batch))
+        return state, action, reward, next_state, next_action, done, q1n, q2n
     
     def __len__(self):
         return len(self.buffer)
@@ -123,7 +139,7 @@ class DeepDoubleSarsa(torch.nn.Module):
         self.q1 = torch.nn.Linear(initus, 10, bias=bias)
         self.q2 = torch.nn.Linear(10, exitus, bias=bias)
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.00025)
 
     def forward(self, input):
         q = torch.nn.functional.relu(self.q1(input))
@@ -133,18 +149,18 @@ class DeepDoubleSarsa(torch.nn.Module):
 
     def update(self, sarsa, q2, gamma):   
         s, a, r, sn, an, d = sarsa
-        s = torch.FloatTensor(s)
+        s = Variable(torch.FloatTensor(s))
         sn = torch.FloatTensor(sn)
-        a = torch.FloatTensor(a)
-        an = torch.FloatTensor(an)
-        r = torch.FloatTensor(r)
-        d = torch.FloatTensor(d)
-
-
+        # a = torch.FloatTensor(a)
+        # an = torch.FloatTensor(an)
+        r = Variable(torch.FloatTensor(r))
+        d = Variable(torch.FloatTensor(d))
+        qb = Variable(torch.FloatTensor(q2))
 
         q = self(s)
+        # print(qb)
         self.optimizer.zero_grad()
-        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*q2[:,an] - q[:,a],2)/2.0)
+        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*qb[:,an] - q[:,a],2)/2.0)
         loss.backward()
         self.optimizer.step()
         return loss

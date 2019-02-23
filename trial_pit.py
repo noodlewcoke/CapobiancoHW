@@ -76,7 +76,7 @@ def deep_grid_world():
     ddsarsaB = DeepDoubleSarsa(64, 4)
     
 
-    batch_size = 35
+    batch_size = 16
     episodes = 50000
     rewards, lossa, lossb = [], [], []
     replay_buffer = ReplayBuffer(1000)
@@ -113,15 +113,17 @@ def deep_grid_world():
 
             an = act(q1n, q2n, epsilon)
             # sarsa = [input, a, r, n_input, an]
-            replay_buffer.push(input1, a, r, n_input1, done, q1n, q2n)
+            replay_buffer.push(input1, a, r, n_input1, an, done, np.squeeze(q1n.data.numpy()), np.squeeze(q2n.data.numpy()))
             if len(replay_buffer)>batch_size:
                 loss = 0
-                s, a, r, sp, ap, d, q1n, q2n = replay_buffer.sample(batch_size)
+                s, a, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
                 if np.random.rand(1)[0] > 0.5:
-                    loss = ddsarsaA.update([s, a, r, sp, ap, d], q2n, gamma)
+                    # print(q2nn)
+                    loss = ddsarsaA.update([s, a, r, sp, ap, d], q2nn, gamma)
                     lossa.append(loss.data[0])
                 else:
-                    loss = ddsarsaB.update([s, a, r, sp, ap, d], q1n, gamma)
+                    # print(q1nn)
+                    loss = ddsarsaB.update([s, a, r, sp, ap, d], q1nn, gamma)
                     lossb.append(loss.data[0])
                 print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss.data[0]))
             a = an
@@ -253,6 +255,77 @@ def step(state, action, step_reward=None):
             else:
                 r = 6
     return r, sn, done
+
+def gym_bowling():
+    env = gym.make('Boxing-v0')
+
+    obs_len = env.observation_space.shape[0]
+    
+    ddsarsa1 = DeepDoubleSarsa(obs_len, 18)
+    ddsarsa1.to("cuda")
+    ddsarsa2 = DeepDoubleSarsa(obs_len, 18)
+    ddsarsa2.to("cuda")
+
+    alpha, gamma, epsilon = 0.1, 0.99, 0.1
+    episodes = 10000
+    rewards, lossa, lossb = [], [], []
+    for e in range(episodes):
+        done = False
+        total_reward = 0
+
+        obs = env.reset()
+        obs = color.rgb2gray(obs)
+        obs = cv2.resize(obs, None, fx = 0.5, fy = 0.4, interpolation =cv2.INTER_CUBIC)
+        obs = Variable(torch.from_numpy(obs))
+        obs = obs.view(-1, 1, 84, 80)
+        obs = obs.float()
+        obs = obs.to("cuda")
+        while not done:
+
+            #env.render()
+            qa = ddsarsa1(obs)
+            qb = ddsarsa2(obs)
+            a = gym_act(env, qa, qb, epsilon)
+            n_obs, r, done, _ = env.step(a)
+            
+            n_obs = color.rgb2gray(n_obs)
+            n_obs = cv2.resize(n_obs, None, fx = 0.5, fy = 0.4, interpolation =cv2.INTER_CUBIC)
+            n_obs = Variable(torch.from_numpy(n_obs))
+            n_obs = n_obs.view(-1, 1, 84, 80)
+            n_obs = n_obs.float()
+            n_obs = n_obs.to("cuda")
+            n_qa = ddsarsa1(n_obs)
+            n_qb = ddsarsa2(n_obs)
+            an = gym_act(env, n_qa, n_qb, epsilon)
+            sarsa = [obs, a, r, n_obs, an]
+            loss = 0
+            '''if np.random.rand(1)[0] > 0.5:
+                loss = ddsarsa1.update(sarsa, n_qb, gamma)
+                lossa.append(loss.item())
+            else:
+                loss = ddsarsa2.update(sarsa, n_qa, gamma)
+                lossb.append(loss.item())'''
+            obs = n_obs
+            a = an
+            total_reward +=r
+        print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss))
+        rewards.append(total_reward)
+           
+    # print(total_reward)
+    plt.subplot(3,1,1)
+    plt.plot(rewards)
+    plt.title("Rewards")
+
+    plt.subplot(3,1,2)
+    plt.plot(lossa)
+    plt.title("Lossa")
+
+    plt.subplot(3,1,3)
+    plt.plot(lossb)
+    plt.title("Lossb")
+
+    plt.savefig('dd_10.png')
+    plt.show()
 
 
 if __name__ == '__main__':
