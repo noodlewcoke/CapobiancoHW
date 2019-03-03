@@ -9,6 +9,9 @@ import operator as op
 import gym
 import torch
 from torch.autograd import Variable
+from deepming_training import DeepDoubleSarsa as dds 
+from skimage import color
+import cv2
 
 
 def grid_world():
@@ -216,7 +219,7 @@ def gym_act(env, q1, q2, epsilon):
     if np.random.rand(1)[0] < epsilon:
         return env.action_space.sample()
     else:
-        avg = [i+j for i,j in zip(q1.data.numpy(),q2.data.numpy())]
+        avg = [i+j for i,j in zip(np.squeeze(q1.cpu().data.numpy()),np.squeeze(q2.cpu().data.numpy()))]
         return np.argmax(np.array(avg))
     
 def act(q1, q2, epsilon):
@@ -257,16 +260,19 @@ def step(state, action, step_reward=None):
     return r, sn, done
 
 def gym_bowling():
-    env = gym.make('Boxing-v0')
+    env = gym.make('Bowling-v0')
 
     obs_len = env.observation_space.shape[0]
     
-    ddsarsa1 = DeepDoubleSarsa(obs_len, 18)
+    ddsarsa1 = dds(obs_len, 6, bias=True)
     ddsarsa1.to("cuda")
-    ddsarsa2 = DeepDoubleSarsa(obs_len, 18)
+    ddsarsa2 = dds(obs_len, 6, bias=True)
     ddsarsa2.to("cuda")
+    ddsarsa1.load('models/bowling_dm1a.pt')
+    ddsarsa2.load('models/bowling_dm1b.pt')
 
-    alpha, gamma, epsilon = 0.1, 0.99, 0.1
+
+    alpha, gamma, epsilon = 0.1, 0.99, 0.0
     episodes = 10000
     rewards, lossa, lossb = [], [], []
     for e in range(episodes):
@@ -282,7 +288,7 @@ def gym_bowling():
         obs = obs.to("cuda")
         while not done:
 
-            #env.render()
+            # env.render()
             qa = ddsarsa1(obs)
             qb = ddsarsa2(obs)
             a = gym_act(env, qa, qb, epsilon)
@@ -297,7 +303,7 @@ def gym_bowling():
             n_qa = ddsarsa1(n_obs)
             n_qb = ddsarsa2(n_obs)
             an = gym_act(env, n_qa, n_qb, epsilon)
-            sarsa = [obs, a, r, n_obs, an]
+            # sarsa = [obs, a, r, n_obs, an]
             loss = 0
             '''if np.random.rand(1)[0] > 0.5:
                 loss = ddsarsa1.update(sarsa, n_qb, gamma)
@@ -329,9 +335,9 @@ def gym_bowling():
 
 
 if __name__ == '__main__':
-    deep_grid_world()
+    # deep_grid_world()
     # gym_cartpole()
-    
+    gym_bowling()
     pass
 
 

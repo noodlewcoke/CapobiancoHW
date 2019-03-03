@@ -25,23 +25,7 @@ class ReplayBuffer:
         self.position = (self.position + 1) % self.capacity
     
     def sample(self, batch_size):
-
-        # np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
         batch = random.sample(self.buffer, batch_size)
-        # state, action, reward, next_state, next_action, done, q1n, q2n = batch[0]
-        # state, action, reward, next_state, next_action, done, q1n, q2n = [state], [action], [reward], [next_state], [next_action], [done], [q1n], [q2n]
-
-        # for b in batch[1:]:
-        #     s, a, r, sn, an, d, q1, q2 = b
-        #     state = np.concatenate([state, [s]])
-        #     action = np.concatenate([action, [a]])
-        #     reward = np.concatenate([reward, [r]])
-        #     next_state = np.concatenate([next_state, [sn]])
-        #     next_action = np.concatenate([next_action, [an]])
-        #     done = np.concatenate([done, [d]])
-        #     q1n = np.concatenate([q1n, [q1]])
-        #     q2n = np.concatenate([q2n, [q2]])
-
         state, action, reward, next_state, next_action, done, q1n, q2n = map(np.stack, zip(*batch))
         return state, action, reward, next_state, next_action, done, q1n, q2n
     
@@ -99,9 +83,7 @@ class Expected_Double_Sarsa:
 
     def update(self, sarsa):
         s, a, r, sn, an = sarsa
-        
         sa = '{},{}'.format(s,a)
-        # sn = '{},{}'.format(sn,an)
 
         d1 = np.array([(self.q1['{},{}'.format(sn,a)] + self.q2['{},{}'.format(sn,a)])/2 for a in self.action_space])
         v = 0
@@ -136,10 +118,10 @@ class DeepDoubleSarsa(torch.nn.Module):
     def __init__(self, initus, exitus, bias=False):
         super(DeepDoubleSarsa, self).__init__()
 
-        self.q1 = torch.nn.Linear(initus, 10, bias=bias)
-        self.q2 = torch.nn.Linear(10, exitus, bias=bias)
+        self.q1 = torch.nn.Linear(initus, 32, bias=bias)
+        self.q2 = torch.nn.Linear(32, exitus, bias=bias)
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.00025)
+        self.optimizer = torch.optim.RMSprop(self.parameters(), lr=0.00025)
 
     def forward(self, input):
         q = torch.nn.functional.relu(self.q1(input))
@@ -149,88 +131,26 @@ class DeepDoubleSarsa(torch.nn.Module):
 
     def update(self, sarsa, q2, gamma):   
         s, a, r, sn, an, d = sarsa
-        s = Variable(torch.FloatTensor(s))
-        sn = torch.FloatTensor(sn)
-        # a = torch.FloatTensor(a)
-        # an = torch.FloatTensor(an)
+        s = Variable(torch.FloatTensor(s)).cuda()
         r = Variable(torch.FloatTensor(r))
         d = Variable(torch.FloatTensor(d))
         qb = Variable(torch.FloatTensor(q2))
 
         q = self(s)
-        # print(qb)
+
+        in_q = [np.arange(len(a)), a]
+        in_qb = [np.arange(len(an)), an]
+
         self.optimizer.zero_grad()
-        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*qb[:,an] - q[:,a],2)/2.0)
+        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*qb[in_qb] - q.cpu()[in_q],2)/2.0)
         loss.backward()
         self.optimizer.step()
         return loss
-
-class cnnDeepDoubleSarsa(torch.nn.Module):
-
-    def __init__(self, initus, exitus, bias=False):
-        super(DeepDoubleSarsa, self).__init__()
-
-        # dobbiamo usare convolutional?????
-        self.cn1 = torch.nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=1)
-        self.cn2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1)
-        self.cn3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-        
-        self.fc1 = torch.nn.Linear(5760, 512, bias=bias)
-        self.fc2 = torch.nn.Linear(512, exitus, bias=bias)
-
-        ''' torch.optim is a package implementing various optimization algorithms '''
-        # Adam optimizer is one of the most popular gradient descent optimizer in deep learning
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-
-    def forward(self, input):
-        q = torch.nn.functional.relu(self.cn1(input))
-        q = torch.nn.functional.relu(self.cn2(q))
-        q = torch.nn.functional.relu(self.cn3(q))
-        q = q.view(-1, self.num_flat_features(q))
-   
-        ''' Activation function (to get the output of node) : ReLU function returns a 0 for input values less than 0,
-         while input values above 0, the function returns a value between 0 and 1 '''
-        
-        q = torch.nn.functional.relu(self.fc1(q))
-        q = self.fc2(q)
-
-        return q
-
-    def update(self, sarsa, q2, gamma):
-        s, a, r, sn, an = sarsa
-        q = self(s)
-        '''In PyTorch we need to set the gradients to zero before starting to do backpropagation because PyTorch accumulates 
-        the gradients on subsequent backward passes'''
-        self.optimizer.zero_grad()
-        '''Update rule for DDS'''
-        loss = torch.mean(torch.pow(r + gamma*q2[:,an] - q[:,a],2)/2.0)
-        ''' Backpropagation: loss.backward() computes dloss/dx for every parameter x which has requires_grad=True. 
-        These are accumulated into x.grad for every parameter x '''
-        loss.backward()
-        ''' with update the weights '''
-        self.optimizer.step()
-        return loss
-      
-    def num_flat_features(self, x):
-        size = x.size()[1:]  # all dimensions except the batch dimension
-        num_features = 1
-        for s in size:
-            num_features *= s
-        return num_features
-
-
 
 def softmax(x):
     e_x = np.exp(x-np.max(x))
     return e_x / e_x.sum()
 
-def softmax_val(val ,x):
-    val_x = np.exp(val-np.max(x))
-    e_x = np.exp(x-np.max(x))
-    return val_x / e_x.sum()
-
-def normalization(x):
-    return (x-np.min(x)/(np.max(x)-np.min(x)))
 
 if __name__ == '__main__':
     pass
