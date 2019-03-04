@@ -1,7 +1,7 @@
 import os 
 curr_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(curr_path)
-from models import DeepDoubleSarsa, Double_Sarsa, Expected_Double_Sarsa, ReplayBuffer
+# from models import DeepDoubleSarsa, Double_Sarsa, Expected_Double_Sarsa, ReplayBuffer
 import numpy as np 
 import matplotlib.pyplot as plt
 import random
@@ -9,145 +9,9 @@ import operator as op
 import gym
 import torch
 from torch.autograd import Variable
-from deepming_training import DeepDoubleSarsa as dds 
+from deepmind_training import DeepDoubleSarsa as dds 
 from skimage import color
 import cv2
-
-
-def grid_world():
-    env = np.arange(16)+1
-    env = np.reshape(env, (4,4))
-    actions = np.array(['r','l','u','d'])
-    # 2 env[0,1]=A, 6 env[1,1]=P, 11 env[2,2]=W, 16 env[3,3]=G
-    #action 'r': x+1, 'l': x-1, 'u': y-1, 'd': y+1
-
-    
-    alpha, gamma, epsilon = 0.1, 0.99, 0.1
-    alphas = []
-    for alpha in np.arange(0.1, 1.0, 0.1):
-        dsarsa = Expected_Double_Sarsa(env, actions, alpha=alpha, gamma=gamma, epsilon=epsilon)
-        
-        episodes = 10000
-        rewards = []
-        for e in range(episodes):
-            total_reward = 0
-            agent_pose = [0,1]
-            s = 2
-            a = dsarsa.act(s)
-            done = False
-            while not done:
-                r, sn, done = step(agent_pose, a, step_reward='d')
-                agent_pose = sn
-                sn = env[sn[0], sn[1]]
-                an = dsarsa.act(sn)
-                sarsa = [s, a, r, sn, an]
-                dsarsa.update(sarsa)
-                # dsarsa.new_alpha(dsarsa.alpha+1/episodes)
-                a = an
-                s = sn
-                total_reward +=r
-                print("Alpha: {} | Episode: {} | Reward: {}".format(alpha, e, total_reward))
-                # epsilon -= 0.5/episodes
-                
-            rewards.append(total_reward)
-        alphas.append(np.mean(rewards))
-
-    plt.plot(np.arange(0.1, 1.0, 0.1), alphas)
-    plt.ylabel("Rewards")
-    plt.xlabel("alpha")
-    plt.savefig('edsarsa_dgrid.png')
-    plt.show()
-
-
-def deep_grid_world():
-    env = np.arange(16)+1
-    env = np.reshape(env, (4,4))
-    actions = np.array(['r','l','u','d'])
-    # 2 env[0,1]=A, 6 env[1,1]=P, 11 env[2,2]=W, 16 env[3,3]=G
-    #action 'r': x+1, 'l': x-1, 'u': y-1, 'd': y+1
-    phip = np.zeros(16)
-    phip[5] = 1
-    phiw = np.zeros(16)
-    phiw[10] = 1
-    phig = np.zeros(16)
-    phig[15] = 1
-
-
-    alpha, gamma, epsilon = 0.1, 0.99, 0.1
-    # for alhpa in np.arange(0.0, 1.0, 0.1):
-    ddsarsaA = DeepDoubleSarsa(64, 4)
-    ddsarsaB = DeepDoubleSarsa(64, 4)
-    
-
-    batch_size = 16
-    episodes = 50000
-    rewards, lossa, lossb = [], [], []
-    replay_buffer = ReplayBuffer(1000)
-    train = 1
-    for e in range(episodes):
-        total_reward = 0
-        agent_pose = [0,1]
-        phia = np.zeros(16)
-        phia[1] = 1
-        input1 = np.concatenate([phia, phip, phiw, phig], axis=0)
-
-        input = Variable(torch.from_numpy(input1))
-        input = input.view(-1, 64)
-        input = input.float()
-        q1 = ddsarsaA(input)
-        q2 = ddsarsaB(input)
-        a = act(q1, q2, epsilon)
-        done = False
-        timesteps = 0
-        while not done:
-            r, sn, done = step(agent_pose, actions[a], step_reward='d')
-            agent_pose = sn
-            spose = env[sn[0], sn[1]]
-            phia = np.zeros(16)
-            phia[spose-1] = 1
-
-            n_input1 = np.concatenate([phia, phip, phiw, phig], axis=0)
-            n_input = torch.from_numpy(n_input1)
-            n_input = Variable(n_input.view(-1, 64))
-            n_input = n_input.float()
-
-            q1n = ddsarsaA(n_input)
-            q2n = ddsarsaB(n_input)
-
-            an = act(q1n, q2n, epsilon)
-            # sarsa = [input, a, r, n_input, an]
-            replay_buffer.push(input1, a, r, n_input1, an, done, np.squeeze(q1n.data.numpy()), np.squeeze(q2n.data.numpy()))
-            if len(replay_buffer)>batch_size:
-                loss = 0
-                s, a, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
-                if np.random.rand(1)[0] > 0.5:
-                    # print(q2nn)
-                    loss = ddsarsaA.update([s, a, r, sp, ap, d], q2nn, gamma)
-                    lossa.append(loss.data[0])
-                else:
-                    # print(q1nn)
-                    loss = ddsarsaB.update([s, a, r, sp, ap, d], q1nn, gamma)
-                    lossb.append(loss.data[0])
-                print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss.data[0]))
-            a = an
-            input = n_input
-            total_reward +=r
-        rewards.append(total_reward)
-           
-    # print(total_reward)
-    plt.subplot(3,1,1)
-    plt.plot(rewards)
-    plt.title("Rewards")
-
-    plt.subplot(3,1,2)
-    plt.plot(lossa)
-    plt.title("Lossa")
-
-    plt.subplot(3,1,3)
-    plt.plot(lossb)
-    plt.title("Lossb")
-
-    plt.show()
 
 
 def gym_cartpole():
@@ -226,7 +90,7 @@ def act(q1, q2, epsilon):
     if np.random.rand(1)[0] < epsilon:
         return random.choice([0,1,2,3])
     else:
-        avg = [i+j for i,j in zip(q1.data.numpy(),q2.data.numpy())]
+        avg = [300*(i+j) for i,j in zip(q1.data.numpy(),q2.data.numpy())]
         return np.argmax(np.array(avg))
 
 
@@ -259,6 +123,86 @@ def step(state, action, step_reward=None):
                 r = 6
     return r, sn, done
 
+class DeepDoubleSarsa(torch.nn.Module):
+
+    def __init__(self, initus, exitus, bias=False):
+        super(DeepDoubleSarsa, self).__init__()
+
+        # dobbiamo usare convolutional?????
+        self.cn1 = torch.nn.Conv2d(1, 32, kernel_size=8, stride=4, padding=1)
+        self.cn1b = torch.nn.BatchNorm2d(32)
+        self.cn2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1)
+        self.cn2b = torch.nn.BatchNorm2d(64)
+        self.cn3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.cn3b = torch.nn.BatchNorm2d(64)
+        
+        self.fc1 = torch.nn.Linear(5760, 512, bias=bias)
+        # self.fc2 = torch.nn.Linear(64, 64, bias=bias)
+
+        # self.fc3 = torch.nn.Linear(64, 64, bias=bias)
+        # self.fc1b = torch.nn.BatchNorm1d(512)
+        self.fc2 = torch.nn.Linear(512, exitus, bias=bias)
+        
+        
+
+        ''' torch.optim is a package implementing various optimization algorithms '''
+        # Adam optimizer is one of the most popular gradient descent optimizer in deep learning
+        self.optimizer = torch.optim.RMSprop(self.parameters(), lr=0.00025)
+
+    def forward(self, input):
+        q = torch.nn.functional.relu(self.cn1b(self.cn1(input)))
+        q = torch.nn.functional.relu(self.cn2b(self.cn2(q)))
+        q = torch.nn.functional.relu(self.cn3b(self.cn3(q)))
+        # q = q.view(-1, self.num_flat_features(q))
+
+        ''' Activation function (to get the output of node) : ReLU function returns a 0 for input values less than 0,
+         while input values above 0, the function returns a value between 0 and 1 '''
+        # q = input
+        q = q.view(-1, self.num_flat_features(q))
+        q = torch.nn.functional.relu(self.fc1(q))
+        # q = torch.nn.functional.relu(self.fc2(q))
+        q = self.fc2(q)
+
+        return q
+
+    def update(self, sarsa, q2, gamma):
+     
+        s, a, r, sn, an, d = sarsa
+        s = Variable(torch.FloatTensor(s)).cuda()
+        r = Variable(torch.FloatTensor(r))
+        d = Variable(torch.FloatTensor(d))
+        qb = Variable(torch.FloatTensor(q2))
+        
+        q = self(s.view(-1, 1, 84, 80))
+
+        in_q = [np.arange(len(a)), a]
+        in_qb = [np.arange(len(an)), an]
+        '''In PyTorch we need to set the gradients to zero before starting to do backpropagation because PyTorch accumulates 
+        the gradients on subsequent backward passes'''
+        self.optimizer.zero_grad()
+        '''Update rule for DDS'''
+        loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*qb[in_qb] - q.cpu()[in_q],2)/2.0)
+        ''' Backpropagation: loss.backward() computes dloss/dx for every parameter x which has requires_grad=True. 
+        These are accumulated into x.grad for every parameter x '''
+        loss.backward()
+        ''' with update the weights '''
+        self.optimizer.step()
+        return loss
+      
+    def num_flat_features(self, x):
+        size = x.size()[1:]  # all dimensions except the batch dimension
+        num_features = 1
+        for s in size:
+            num_features *= s
+        return num_features
+    
+    def save(self, filepath):
+        torch.save(self.state_dict(), filepath)
+
+    def load(self, filepath):
+        self.load_state_dict(torch.load(filepath))
+
+
 def gym_bowling():
     env = gym.make('Bowling-v0')
 
@@ -268,8 +212,8 @@ def gym_bowling():
     ddsarsa1.to("cuda")
     ddsarsa2 = dds(obs_len, 6, bias=True)
     ddsarsa2.to("cuda")
-    ddsarsa1.load('models/bowling_dm1a.pt')
-    ddsarsa2.load('models/bowling_dm1b.pt')
+    ddsarsa1.load('models/bowling_dm3a.pt')
+    ddsarsa2.load('models/bowling_dm3b.pt')
 
 
     alpha, gamma, epsilon = 0.1, 0.99, 0.0
@@ -291,6 +235,9 @@ def gym_bowling():
             # env.render()
             qa = ddsarsa1(obs)
             qb = ddsarsa2(obs)
+            # print(np.squeeze(qa.cpu().data.numpy()))
+            # print(np.squeeze(qb.cpu().data.numpy()))
+
             a = gym_act(env, qa, qb, epsilon)
             n_obs, r, done, _ = env.step(a)
             
@@ -300,24 +247,11 @@ def gym_bowling():
             n_obs = n_obs.view(-1, 1, 84, 80)
             n_obs = n_obs.float()
             n_obs = n_obs.to("cuda")
-            n_qa = ddsarsa1(n_obs)
-            n_qb = ddsarsa2(n_obs)
-            an = gym_act(env, n_qa, n_qb, epsilon)
-            # sarsa = [obs, a, r, n_obs, an]
-            loss = 0
-            '''if np.random.rand(1)[0] > 0.5:
-                loss = ddsarsa1.update(sarsa, n_qb, gamma)
-                lossa.append(loss.item())
-            else:
-                loss = ddsarsa2.update(sarsa, n_qa, gamma)
-                lossb.append(loss.item())'''
             obs = n_obs
-            a = an
             total_reward +=r
-        print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss))
+        print("Episode: {} | Reward: {}".format(e, total_reward))
         rewards.append(total_reward)
-           
-    # print(total_reward)
+
     plt.subplot(3,1,1)
     plt.plot(rewards)
     plt.title("Rewards")
@@ -333,11 +267,61 @@ def gym_bowling():
     plt.savefig('dd_10.png')
     plt.show()
 
+def test_act(q):
+    return np.argmax(np.squeeze(q.cpu().data.numpy()))
+
+
+def test_cartpole():
+    env = gym.make('CartPole-v1')
+    obs_len = env.observation_space.shape[0]
+    
+    ddsarsa1 = dds(obs_len, 2, bias=True)
+    ddsarsa1.to("cuda")
+    ddsarsa2 = dds(obs_len, 2, bias=True)
+    ddsarsa2.to("cuda")
+    ddsarsa1.load('models/cartpole/cartpole_dm1a.pt')
+    ddsarsa2.load('models/cartpole/cartpole_dm1b.pt')
+
+
+    alpha, gamma, epsilon = 0.1, 0.99, 0.0
+    episodes = 100
+    rewards, lossa, lossb = [], [], []
+    for e in range(episodes):
+        done = False
+        total_reward = 0
+
+        obs = env.reset()
+        obs = Variable(torch.from_numpy(obs))
+        obs = obs.view(-1, obs_len)
+        obs = obs.float()
+        obs = obs.to("cuda")
+        while not done:
+
+            env.render()
+            qa = ddsarsa1(obs)
+            qb = ddsarsa2(obs)
+            # print(np.squeeze(qa.cpu().data.numpy()))
+            # print(np.squeeze(qb.cpu().data.numpy()))
+
+            # a = gym_act(env, qa, qb, epsilon)
+            a = test_act(qb)
+            n_obs, r, done, _ = env.step(a)
+            
+            n_obs = Variable(torch.from_numpy(n_obs))
+            n_obs = n_obs.view(-1, obs_len)
+            n_obs = n_obs.float()
+            n_obs = n_obs.to("cuda")
+            obs = n_obs
+            total_reward +=r
+        print("Episode: {} | Reward: {}".format(e, total_reward))
+        rewards.append(total_reward)
+    env.close()
 
 if __name__ == '__main__':
     # deep_grid_world()
     # gym_cartpole()
-    gym_bowling()
+    # gym_bowling()
+    test_cartpole()
     pass
 
 

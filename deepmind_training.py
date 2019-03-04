@@ -11,11 +11,12 @@ import cv2
 
 LOAD = False
 SAVE = True
-saving_fq = 50
-epsilon_decay = 100
-episodes = 10000
+saving_fq = 100
+epsilon_start, epsilon_stop, epsilon_decay = 1.0, 0.1, 400
+episodes = 500
 batch_size = 128
-BUFFER_SIZE = 5000
+BUFFER_SIZE = 1000
+target_update = 50
 squeeze = 4
 cuda0 = torch.device('cuda')
 
@@ -46,19 +47,21 @@ class DeepDoubleSarsa(torch.nn.Module):
         super(DeepDoubleSarsa, self).__init__()
 
         # dobbiamo usare convolutional?????
-        self.cn1 = torch.nn.Conv2d(1, 16, kernel_size=8, stride=4, padding=1)
-        self.cn1b = torch.nn.BatchNorm2d(16)
-        self.cn2 = torch.nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1)
-        self.cn2b = torch.nn.BatchNorm2d(32)
+        # self.cn1 = torch.nn.Conv2d(1, 16, kernel_size=8, stride=4, padding=1)
+        # self.cn1b = torch.nn.BatchNorm2d(16)
+        # self.cn1 = torch.nn.Conv2d(1, 16, kernel_size=8, stride=4, padding=1)
+        # self.cn1b = torch.nn.BatchNorm2d(16)
+        # self.cn2 = torch.nn.Conv2d(16, 32, kernel_size=4, stride=2, padding=1)
+        # self.cn2b = torch.nn.BatchNorm2d(32)
         # self.cn3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
         # self.cn3b = torch.nn.BatchNorm2d(64)
         
-        self.fc1 = torch.nn.Linear(6080, 64, bias=bias)
+        self.fc1 = torch.nn.Linear(initus, 32, bias=bias)
         # self.fc2 = torch.nn.Linear(64, 64, bias=bias)
 
         # self.fc3 = torch.nn.Linear(64, 64, bias=bias)
         # self.fc1b = torch.nn.BatchNorm1d(512)
-        self.fc2 = torch.nn.Linear(64, exitus, bias=bias)
+        self.fc2 = torch.nn.Linear(32, exitus, bias=bias)
         
         
 
@@ -67,7 +70,7 @@ class DeepDoubleSarsa(torch.nn.Module):
         self.optimizer = torch.optim.RMSprop(self.parameters(), lr=0.00025)
 
     def forward(self, input):
-        q = torch.nn.functional.relu(self.cn1b(self.cn1(input)))
+        # q = torch.nn.functional.relu(self.cn1b(self.cn1(input)))
         # q = torch.nn.functional.relu(self.cn2b(self.cn2(q)))
         # q = torch.nn.functional.relu(self.cn3b(self.cn3(q)))
         # q = q.view(-1, self.num_flat_features(q))
@@ -75,10 +78,11 @@ class DeepDoubleSarsa(torch.nn.Module):
         ''' Activation function (to get the output of node) : ReLU function returns a 0 for input values less than 0,
          while input values above 0, the function returns a value between 0 and 1 '''
         # q = input
-        q = q.view(-1, self.num_flat_features(q))
-        q = torch.nn.functional.relu(self.fc1(q))
+        # q = q.view(-1, self.num_flat_features(q))
+        q = torch.nn.functional.relu(self.fc1(input))
         # q = torch.nn.functional.relu(self.fc2(q))
         # q = torch.nn.functional.relu(self.fc1(q))
+        # q = torch.nn.functional.softmax(self.fc2(q), dim=1)
         q = self.fc2(q)
 
         return q
@@ -91,24 +95,19 @@ class DeepDoubleSarsa(torch.nn.Module):
         d = Variable(torch.FloatTensor(d))
         qb = Variable(torch.FloatTensor(q2))
         
-        q = self(s.view(-1, 1, 84, 80))
+        # q = self(s.view(-1, 1, 84, 80))
+        q = self(s)
 
         in_q = [np.arange(len(a)), a]
         in_qb = [np.arange(len(an)), an]
-        '''In PyTorch we need to set the gradients to zero before starting to do backpropagation because PyTorch accumulates 
-        the gradients on subsequent backward passes'''
         self.optimizer.zero_grad()
-        '''Update rule for DDS'''
         loss = torch.mean(torch.pow(r + (1.0 - d)*gamma*qb[in_qb] - q.cpu()[in_q],2)/2.0)
-        ''' Backpropagation: loss.backward() computes dloss/dx for every parameter x which has requires_grad=True. 
-        These are accumulated into x.grad for every parameter x '''
         loss.backward()
-        ''' with update the weights '''
         self.optimizer.step()
         return loss
       
     def num_flat_features(self, x):
-        size = x.size()[1:]  # all dimensions except the batch dimension
+        size = x.size()[1:]
         num_features = 1
         for s in size:
             num_features *= s
@@ -129,18 +128,15 @@ def gym_act(env, q1, q2, epsilon):
     if np.random.rand(1)[0] < epsilon:
         return env.action_space.sample()
     else:
-        # print(np.squeeze(q1.cpu().data.numpy()).shape)
         avg = [i+j for i,j in zip(np.squeeze(q1.cpu().data.numpy()),np.squeeze(q2.cpu().data.numpy()))]
-        # print(avg)
-        # print(np.argmax(np.array(avg)))
         return np.argmax(np.array(avg))  
 
 def deepmind_training():
-    env = gym.make('BipedalWalker-v2')
+    env = gym.make('CartPole-v1')
     obs_len = env.observation_space.shape[0]
-    ddsarsa = DeepDoubleSarsa(obs_len, 4, bias=True)
+    ddsarsa = DeepDoubleSarsa(obs_len, 2, bias=True)
     ddsarsa.to(device=cuda0)
-    target = DeepDoubleSarsa(obs_len, 4, bias=True)
+    target = DeepDoubleSarsa(obs_len, 2, bias=True)
     target.to(device=cuda0)
     if LOAD:
       ddsarsa.load("bowling_fc0a.pt")
@@ -188,37 +184,38 @@ def deepmind_training():
             else:
                 replay_buffer.push(obs1, a, r, n_obs1, an, 0.0, np.squeeze(n_qa.cpu().data.numpy()), np.squeeze(n_qb.cpu().data.numpy()))
             a = an
-            if len(replay_buffer)>batch_size:
-                if np.random.randn(1)[0] > 0.5:
+            if len(replay_buffer)>=batch_size:
+                # if np.random.randn(1)[0] > 0.5:
+                if e%target_update:
                     s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
                     loss = ddsarsa.update([s, ac, r, sp, ap, d], q2nn, gamma)
                     lossa.append(loss.item())
                 else:
-                    s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
-                    loss = target.update([s, ac, r, sp, ap, d], q1nn, gamma)
-                    lossb.append(loss.item())
-                    # ddsarsa.save('target.pt')
-                    # target.load('target.pt')
+                    # s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
+                    # loss = target.update([s, ac, r, sp, ap, d], q1nn, gamma)
+                    # lossb.append(loss.item())
+                    ddsarsa.save('target.pt')
+                    target.load('target.pt')
 
             obs1 = n_obs1
             t += 1
 
         if e<epsilon_decay:
-                epsilon -= 0.9/epsilon_decay
+                epsilon -= 1.0/epsilon_decay
         rewards.append(total_reward)
 
         if e==1:
             max_score = total_reward
         if SAVE and e%saving_fq==0:
-            ddsarsa.save("cartpole_dm1a.pt")
-            target.save("cartpole_dm1b.pt")
-            np.save('cartpole_fc1_rewards', rewards)
-            np.save('cartpole_fc1_lossa', lossa)
+            ddsarsa.save("models/cartpole_dm1a.pt")
+            target.save("models/cartpole_dm1b.pt")
+            np.save('models/cartpole_fc1_rewards', rewards)
+            np.save('models/cartpole_fc1_lossa', lossa)
 
         if SAVE and total_reward > max_score:
             if e>epsilon_decay:
-                ddsarsa.save("max_dma.pt")
-                target.save("max_dmb.pt")
+                ddsarsa.save("models/max_dma.pt")
+                target.save("models/max_dmb.pt")
             max_score = total_reward
         
         print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, loss.item()))
@@ -231,7 +228,7 @@ def deepmind_training():
     plt.subplot(2,1,2)
     plt.plot(lossa)
     plt.title("Lossa")
-    plt.savefig('prova_boxing.png')
+    plt.savefig('prova_cartpole.png')
     plt.show()
 
 def deepmind_bowling():
@@ -246,7 +243,7 @@ def deepmind_bowling():
       target.load("bowling_fc0b.pt")
 
     replay_buffer = ReplayBuffer(BUFFER_SIZE)
-    alpha, gamma, epsilon = 0.1, 0.99, 1.0
+    gamma, epsilon = 0.99, epsilon_start
     max_score = 0
     rewards, lossa, lossb = [], [], []
 
@@ -272,8 +269,8 @@ def deepmind_bowling():
         ep_lossb = 0
 
         while not done:
-            if e%100==0:
-                env.render()
+            # if e%100==0:
+            #     env.render()
             n_obs1, r, done, _ = env.step(a)
             total_reward +=r
             n_obs1 = color.rgb2gray(n_obs1)
@@ -295,14 +292,17 @@ def deepmind_bowling():
                 obs1 = n_obs1
                 a = an
             if len(replay_buffer)>batch_size:
-                if np.random.randn(1)[0] > 0.5:
-                    s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
+                # if np.random.randn(1)[0] > 0.5:
+                if e%target_update:
+                    s, ac, r, sp, ap, d, _, q2nn = replay_buffer.sample(batch_size)
                     loss = ddsarsa.update([s, ac, r, sp, ap, d], q2nn, gamma)
                     ep_lossa += loss.item()
                 else:
-                    s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
-                    loss = target.update([s, ac, r, sp, ap, d], q1nn, gamma)
-                    ep_lossb += loss.item()
+                    # s, ac, r, sp, ap, d, q1nn, q2nn = replay_buffer.sample(batch_size)
+                    # loss = target.update([s, ac, r, sp, ap, d], q1nn, gamma)
+                    # ep_lossb += loss.item()
+                    ddsarsa.save('target.pt')
+                    target.load('target.pt')
 
             t += 1
         lossa.append(ep_lossa/t)
@@ -310,25 +310,25 @@ def deepmind_bowling():
         rewards.append(total_reward)
 
         if e<epsilon_decay:
-                epsilon -= (1.0 - 0.1)/epsilon_decay
+                epsilon -= (epsilon_start - epsilon_stop)/epsilon_decay
 
         if e==1:
             max_score = total_reward
         if SAVE and e%saving_fq==0:
-            ddsarsa.save("models/bowling_dm3a.pt")
-            target.save("models/bowling_dm3b.pt")
-            np.save('models/bowling_cn2_rewards', rewards)
-            np.save('models/bowling_cn2_lossa', lossa)
-            np.save('models/bowling_cn2_lossb', lossb)
+            ddsarsa.save("models/bowling_dm4a.pt")
+            target.save("models/bowling_dm4b.pt")
+            np.save('models/bowling_cn3_rewards', rewards)
+            np.save('models/bowling_cn3_lossa', lossa)
+            np.save('models/bowling_cn3_lossb', lossb)
 
 
         if SAVE and total_reward > max_score:
             if e>epsilon_decay:
-                ddsarsa.save("models/bowling_max_dm3a.pt")
-                target.save("models/bowling_max_dm3b.pt")
+                ddsarsa.save("models/bowling_max_dm4a.pt")
+                target.save("models/bowling_max_dm4b.pt")
             max_score = total_reward
         
-        print("Episode: {} | Reward: {} | Loss: {}".format(e, total_reward, np.mean(ep_lossa/t + ep_lossb/t)))
+        print("Episode: {} | Timesteps: {} | Reward: {} | Loss: {}".format(e, t, total_reward, np.mean(ep_lossa/t + ep_lossb/t)))
 
     plt.subplot(2,1,1)
     plt.plot(rewards)
@@ -341,4 +341,5 @@ def deepmind_bowling():
     plt.show()
 
 if __name__ == "__main__":
-    deepmind_bowling()
+    deepmind_training()
+    # deepmind_bowling()
